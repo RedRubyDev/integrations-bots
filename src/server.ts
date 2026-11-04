@@ -4,14 +4,13 @@ import "dotenv/config";
 import Redis from "ioredis";
 import { RedisStore } from "./storage/redisStore";
 import { Connections } from "./storage/connections";
-import { createProviders } from "./providers/registry";
+import { createConfiguredProviders } from "./providers/registry";
 import { ShopBackendClient } from "./clients/shopBackendClient";
 import { ConversationService } from "./services/conversationService";
 import { ConnectionService } from "./services/connectionService";
 import { MessageService } from "./services/messageService";
 import { createApp } from "./http/app";
 import { UserSessions } from "./storage/userSessions";
-import { createProviderTransport, createTelegramRelayTransport } from "./providers/transport";
 import type { Server } from "http";
 
 const required = (name: string) => {
@@ -33,10 +32,8 @@ const connections = new Connections(
   store,
   required("BOT_STORAGE_ENCRYPTION_KEY"),
 );
-const telegramTransport = createProviderTransport(process.env.TELEGRAM_PROXY_URL);
-const baleTransport = createProviderTransport(process.env.BALE_PROXY_URL);
-const providers = createProviders(fetch, { telegram: process.env.TELEGRAM_API_BASE_URL, bale: process.env.BALE_API_BASE_URL },
-  { telegram: createTelegramRelayTransport(telegramTransport.request, process.env.TELEGRAM_API_BASE_URL, process.env.TELEGRAM_RELAY_API_KEY), bale: baleTransport.request });
+const providerRuntime = createConfiguredProviders(process.env);
+const { providers } = providerRuntime;
 const backend = new ShopBackendClient(
   required("SHOP_BACKEND_URL_TEMPLATE"),
   apiKey,
@@ -69,7 +66,7 @@ const stop = async (exitCode = 0) => {
   stopping = true;
   stopPolling();
   if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
-  await Promise.allSettled([telegramTransport.close(), baleTransport.close()]);
+  await providerRuntime.close();
   redis.disconnect();
   process.exit(exitCode);
 };

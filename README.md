@@ -130,6 +130,12 @@ JSON Bot API requests, not file uploads/downloads. It preserves Telegram error
 responses, including rate limits, and never forwards arbitrary destination URLs.
 Leave the relay key empty and restore `https://api.telegram.org` for direct access.
 
+Invalid messenger URL, proxy or relay-key configuration logs a warning and disables
+only that provider until configuration is corrected and the service restarted.
+The service and other provider remain available. Disabled provider operations
+return HTTP 503 with `PROVIDER_CONFIGURATION_INVALID`; webhooks return 503 so
+updates can be retried. No direct Telegram fallback bypasses the configured relay.
+
 ## Activate a shop
 
 1. Apply both tenant migrations in order using the existing provisioning workflow:

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { createTelegramRelay } = require('../scripts/telegram-relay.cjs');
 const { createTelegramRelayTransport } = require('../dist/providers/transport');
 const { createProviders } = require('../dist/providers/registry');
+const { createConfiguredProviders } = require('../dist/providers/registry');
 const key = 'relay-test-key-'.repeat(3);
 
 async function withRelay(request, run) {
@@ -74,4 +75,73 @@ test('integration sends Telegram through authenticated relay and keeps Bale sepa
   assert.throws(() => createTelegramRelayTransport(fetch, 'http://relay.example', key));
   assert.throws(() => createTelegramRelayTransport(fetch, 'https://api.telegram.org', key));
   assert.equal(createTelegramRelayTransport(fetch), fetch);
+});
+
+test('invalid provider configuration is isolated without network fallback or secret logs', async () => {
+  const cases = [
+    { TELEGRAM_RELAY_API_KEY: key },
+    { TELEGRAM_API_BASE_URL: 'http://relay.example', TELEGRAM_RELAY_API_KEY: key },
+    { TELEGRAM_API_BASE_URL: 'not-a-url-SECRET', TELEGRAM_RELAY_API_KEY: key },
+    { TELEGRAM_API_BASE_URL: 'https://user:SECRET@relay.example', TELEGRAM_RELAY_API_KEY: key },
+    { TELEGRAM_API_BASE_URL: 'https://relay.example', TELEGRAM_RELAY_API_KEY: 'short' },
+    { TELEGRAM_PROXY_URL: 'socks5://localhost:1234' },
+  ];
+  for (const env of cases) {
+    const warnings = [];
+    let calls = 0;
+    const runtime = createConfiguredProviders(env, async () => {
+      calls++;
+      return Response.json({ ok: true, result: true });
+    }, message => warnings.push(message));
+    try {
+      for (const action of [
+        () => runtime.providers.telegram.send('123:SECRET', '12', 'text'),
+        () => runtime.providers.telegram.setup('123:SECRET', 'https://callback.example', 'secret'),
+        () => runtime.providers.telegram.getUpdates('123:SECRET', 0),
+        () => runtime.providers.telegram.deleteMessage('123:SECRET', '12', 1),
+      ]) {
+        await assert.rejects(action, error => error.code === 'PROVIDER_CONFIGURATION_INVALID' && error.status === 503);
+      }
+      assert.throws(() => runtime.providers.telegram.parseUpdate({}), error => error.code === 'PROVIDER_CONFIGURATION_INVALID');
+      assert.equal(calls, 0);
+      await runtime.providers.bale.send('123:TEST', '12', 'text');
+      assert.equal(calls, 1);
+      assert.equal(warnings.length, 1);
+      assert.ok(!warnings[0].includes('SECRET'));
+      assert.ok(!warnings[0].includes(key));
+    } finally { await runtime.close(); }
+  }
+});
+
+test('HTTP service stays live with broken relay config; Telegram returns 503 and Bale sends', async () => {
+  const { fixture } = require('./helpers.cjs');
+  const { createApp } = require('../dist/http/app');
+  const { MessageService } = require('../dist/services/messageService');
+  const { tenantServiceKey } = require('../dist/domain');
+  const f = fixture();
+  const runtime = createConfiguredProviders({ TELEGRAM_RELAY_API_KEY: key }, async () => Response.json({ ok: true, result: true }), () => {});
+  await f.connections.save(f.connection);
+  await f.connections.save({ ...f.connection, id: f.connections.id('shop-a', 'bale'), provider: 'bale' });
+  const app = createApp({ ...f, providers: runtime.providers, apiKey: 'service-key',
+    conversation: { handle: async () => assert.fail('Disabled webhook must not be processed') },
+    messages: new MessageService(f.store, f.connections, runtime.providers) });
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await fetch(`${base}/health`)).status, 200);
+    const send = provider => fetch(`${base}/v1/messages`, { method: 'POST',
+      headers: { authorization: `Bearer ${tenantServiceKey('service-key', 'shop-a')}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ tenantId: 'shop-a', provider, chatId: '12', text: 'hello' }) });
+    const failed = await send('telegram');
+    assert.equal(failed.status, 503);
+    assert.equal((await failed.json()).code, 'PROVIDER_CONFIGURATION_INVALID');
+    assert.equal((await send('bale')).status, 200);
+    assert.equal((await fetch(`${base}/webhooks/${f.connection.id}/${f.connection.webhookSecret}`, {
+      method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': f.connection.webhookSecret, 'Content-Type': 'application/json' }, body: '{}',
+    })).status, 503);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    await runtime.close();
+  }
 });

@@ -4,6 +4,7 @@ import {
   IntegrationError,
   Provider,
 } from "../contracts";
+import { createProviderTransport, createTelegramRelayTransport } from "./transport";
 
 type Fetch = typeof fetch;
 
@@ -121,3 +122,41 @@ export function createProviders(
 }
 export const isProvider = (value: unknown): value is Provider =>
   value === "telegram" || value === "bale";
+
+/** Optional messenger configuration must not prevent the other providers from starting. */
+export function createConfiguredProviders(
+  env: NodeJS.ProcessEnv,
+  request: Fetch = fetch,
+  warn: (message: string) => void = console.warn,
+): { providers: Record<Provider, BotProvider>; close: () => Promise<void> } {
+  const providers = {} as Record<Provider, BotProvider>;
+  const closers: Array<() => Promise<void>> = [];
+  for (const name of ["telegram", "bale"] as const) {
+    const prefix = name.toUpperCase();
+    try {
+      const baseUrl = env[`${prefix}_API_BASE_URL`] || (name === "telegram" ? "https://api.telegram.org" : "https://tapi.bale.ai");
+      const transport = createProviderTransport(env[`${prefix}_PROXY_URL`]);
+      closers.push(transport.close);
+      const direct = env[`${prefix}_PROXY_URL`]?.trim() ? transport.request : request;
+      const configuredRequest = name === "telegram"
+        ? createTelegramRelayTransport(direct, baseUrl, env.TELEGRAM_RELAY_API_KEY)
+        : direct;
+      providers[name] = createProvider(name, baseUrl, configuredRequest);
+    } catch {
+      // Never log raw errors: URL parsing errors may include credentials.
+      const message = `${name} configuration invalid; check ${prefix}_API_BASE_URL, ${prefix}_PROXY_URL${name === "telegram" ? " and TELEGRAM_RELAY_API_KEY" : ""}, then restart the service`;
+      warn(message);
+      const unavailable = () => new IntegrationError(message, 503, 0, "PROVIDER_CONFIGURATION_INVALID");
+      const reject = async (): Promise<never> => { throw unavailable(); };
+      providers[name] = {
+        name,
+        // Return 503 for webhooks so updates are retried rather than silently dropped.
+        parseUpdate: () => { throw unavailable(); },
+        setup: reject, send: reject, deleteMessage: reject,
+        preparePolling: reject, getUpdates: reject,
+        profileUrl: username => `https://${name === "telegram" ? "t.me" : "ble.ir"}/${username}`,
+      };
+    }
+  }
+  return { providers, close: async () => { await Promise.allSettled(closers.map(close => close())); } };
+}
