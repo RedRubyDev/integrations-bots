@@ -39,9 +39,22 @@ export class ShopBackendClient implements ShopBackend {
         ...(body ? { body: JSON.stringify(body) } : {}),
         redirect: "error", signal: AbortSignal.timeout(10000),
       });
-      const result = await response.json() as ApiResult<T>;
+      let result: ApiResult<T>;
+      try {
+        result = await response.json() as ApiResult<T>;
+      } catch {
+        // Express/proxies may return plain text for 401/403/5xx. Preserve the
+        // HTTP status so verification reports authentication rather than networking.
+        if (response.status < 400) throw new IntegrationError("Shop backend returned an invalid response", 502, 0, "SHOP_BACKEND_INVALID_RESPONSE");
+        result = { isSuccess: false };
+      }
+      if (!result || typeof result !== "object" || typeof result.isSuccess !== "boolean") {
+        if (response.status < 400) throw new IntegrationError("Shop backend returned an invalid response", 502, 0, "SHOP_BACKEND_INVALID_RESPONSE");
+        result = { isSuccess: false };
+      }
       return { status: response.status, result };
-    } catch {
+    } catch (error) {
+      if (error instanceof IntegrationError) throw error;
       // Never expose credential-bearing fetch errors or response bodies in exceptions.
       throw new IntegrationError("Shop backend unavailable", 503, 0, "SHOP_BACKEND_UNREACHABLE");
     }

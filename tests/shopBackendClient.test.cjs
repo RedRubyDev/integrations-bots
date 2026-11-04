@@ -19,6 +19,29 @@ function setup(responses) {
 }
 const tokens = { accessToken: 'PRIVATE_ACCESS_TOKEN', refreshToken: 'PRIVATE_REFRESH_TOKEN' };
 const identity = { externalUserId: '123', chatId: '123', username: 'admin', password: 'PRIVATE_PASSWORD' };
+
+test('plain-text backend errors preserve their HTTP status during setup', async () => {
+  const f = fixture();
+  const sessions = new UserSessions(f.store, 'ab'.repeat(32));
+  for (const [status, code] of [[401, 'SHOP_SERVICE_AUTH_FAILED'], [403, 'SHOP_DOMAIN_MISMATCH'], [503, 'SHOP_BACKEND_UNREACHABLE']]) {
+    const client = new ShopBackendClient('https://api.{domain}', 'MASTER_KEY', sessions,
+      async () => new Response('Sensitive upstream error', { status }));
+    await assert.rejects(client.verify(f.connection), error => error.code === code && !error.message.includes('Sensitive'));
+  }
+});
+
+test('invalid successful backend responses are distinguished from network failures', async () => {
+  const f = fixture();
+  const sessions = new UserSessions(f.store, 'ab'.repeat(32));
+  for (const body of ['<html>wrong server</html>', 'null', '{}']) {
+    const client = new ShopBackendClient('https://api.{domain}', 'MASTER_KEY', sessions,
+      async () => new Response(body));
+    await assert.rejects(client.verify(f.connection), { code: 'SHOP_BACKEND_INVALID_RESPONSE' });
+  }
+  const client = new ShopBackendClient('https://api.{domain}', 'MASTER_KEY', sessions,
+    async () => { throw new Error('private connection data'); });
+  await assert.rejects(client.verify(f.connection), { code: 'SHOP_BACKEND_UNREACHABLE' });
+});
 test('uses normal login then links identity with normal bearer token; all stored tokens are encrypted', async () => {
   const f = setup([{ result: { isSuccess: true, data: tokens } }, { result: { isSuccess: true } }]);
   assert.equal(await f.client.authenticate(f.connection, identity), true);
