@@ -11,7 +11,7 @@ import { ConnectionService } from "./services/connectionService";
 import { MessageService } from "./services/messageService";
 import { createApp } from "./http/app";
 import { UserSessions } from "./storage/userSessions";
-import { createProviderTransport } from "./providers/transport";
+import { createProviderTransport, createTelegramRelayTransport } from "./providers/transport";
 import type { Server } from "http";
 
 const required = (name: string) => {
@@ -36,7 +36,7 @@ const connections = new Connections(
 const telegramTransport = createProviderTransport(process.env.TELEGRAM_PROXY_URL);
 const baleTransport = createProviderTransport(process.env.BALE_PROXY_URL);
 const providers = createProviders(fetch, { telegram: process.env.TELEGRAM_API_BASE_URL, bale: process.env.BALE_API_BASE_URL },
-  { telegram: telegramTransport.request, bale: baleTransport.request });
+  { telegram: createTelegramRelayTransport(telegramTransport.request, process.env.TELEGRAM_API_BASE_URL, process.env.TELEGRAM_RELAY_API_KEY), bale: baleTransport.request });
 const backend = new ShopBackendClient(
   required("SHOP_BACKEND_URL_TEMPLATE"),
   apiKey,

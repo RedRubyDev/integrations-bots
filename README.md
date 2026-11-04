@@ -95,6 +95,41 @@ Provider URL overrides are optional and must use HTTPS. Use only trusted provide
 proxies: provider tokens are sent to those endpoints. Tokens are entered through
 the shop admin configuration screen, then setup securely provisions this service.
 
+### Optional single-file Telegram relay
+
+If the integration host cannot reach Telegram, copy only
+`scripts/telegram-relay.cjs` to a server that can. It needs Node 20+, no npm install.
+Generate a separate random key (do not reuse the shop service key or bot token):
+
+```sh
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# On the relay host (POSIX shell):
+export TELEGRAM_RELAY_API_KEY='<generated-key>'
+node telegram-relay.cjs
+```
+
+The relay listens on `127.0.0.1:3020` by default (`HOST`/`PORT` override it).
+Put an HTTPS reverse proxy in front of it, forwarding paths unchanged. Disable
+access logging for `/bot...` paths: those paths contain BotFather tokens.
+The relay host and TLS proxy must be trusted with bot tokens and message content.
+Run it under your normal process supervisor for restart on failure.
+
+In `integrations-bots/.env`, set:
+
+```dotenv
+TELEGRAM_API_BASE_URL=https://telegram-relay.your-domain.com
+TELEGRAM_RELAY_API_KEY=<same-generated-key>
+TELEGRAM_PROXY_URL=
+```
+
+Restart `integrations-bots`. Existing Telegram setup, polling and send operations
+now use the relay; bot tokens still come from the shop admin configuration.
+Webhook updates still go directly to `PUBLIC_BASE_URL`, so webhook mode needs
+public HTTPS on the integration service. The relay only forwards authenticated
+JSON Bot API requests, not file uploads/downloads. It preserves Telegram error
+responses, including rate limits, and never forwards arbitrary destination URLs.
+Leave the relay key empty and restore `https://api.telegram.org` for direct access.
+
 ## Activate a shop
 
 1. Apply both tenant migrations in order using the existing provisioning workflow:
