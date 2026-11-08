@@ -44,7 +44,30 @@ clicking setup. The service validates the bot and removes its webhook, then poll
 for updates. `localhost` can be entered in the bot. No public callback/tunnel is
 needed; the server still needs network access to the Telegram/Bale API. Polling
 offsets survive restarts and share the webhook deduplication/command handler.
-Polling mode and HTTP loopback backend overrides are rejected in production.
+HTTP loopback backend overrides are rejected in production.
+
+### Independent provider update modes
+
+Each provider accepts either `webhook` or `polling`. For Bale webhooks and
+Telegram polling, set:
+
+```dotenv
+TELEGRAM_UPDATE_MODE=polling
+BALE_UPDATE_MODE=webhook
+PUBLIC_BASE_URL=https://bots.your-domain.com
+```
+
+Provider settings override `BOT_UPDATE_MODE`, which remains the fallback (default
+`webhook`). Polling is supported in production and requires outbound provider API
+access. Public HTTPS is required whenever either provider uses webhooks. Localhost
+shop domains and loopback HTTP backend overrides remain development-only.
+
+Restart the service after changing modes, then click Setup again for each affected
+shop/provider. Setup removes the webhook for polling, or registers it for webhook
+mode, and saves the chosen mode. Existing saved connections are not automatically
+migrated by environment changes. The polling worker ignores providers configured
+for webhooks. `.env.local.example` keeps both providers on polling for local use;
+remove any provider overrides when using the global local setting.
 
 For V2Ray, an explicit messenger-only HTTP CONNECT proxy can be configured with
 `TELEGRAM_PROXY_URL=http://127.0.0.1:10808` (use your actual HTTP/mixed listener port).

@@ -12,6 +12,7 @@ import { MessageService } from "./services/messageService";
 import { createApp } from "./http/app";
 import { UserSessions } from "./storage/userSessions";
 import type { Server } from "http";
+import { resolveUpdateModes } from "./updateModes";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -39,8 +40,7 @@ const backend = new ShopBackendClient(
   apiKey,
   new UserSessions(store, required("BOT_STORAGE_ENCRYPTION_KEY"), Number(process.env.BOT_SESSION_TTL_SECONDS) || 30 * 86400),
 );
-const mode = process.env.BOT_UPDATE_MODE || "webhook";
-if (mode !== "webhook" && mode !== "polling") throw new Error("BOT_UPDATE_MODE must be webhook or polling");
+const modes = resolveUpdateModes(process.env);
 const conversation = new ConversationService(store, backend);
 const app = createApp({
   apiKey,
@@ -53,7 +53,7 @@ const app = createApp({
     providers,
     backend,
     process.env.PUBLIC_BASE_URL || "",
-    mode,
+    modes,
   ),
   conversation,
   messages: new MessageService(store, connections, providers),
@@ -73,8 +73,8 @@ const stop = async (exitCode = 0) => {
 async function start() {
   // enableOfflineQueue=false requires an established connection before scanning for bots.
   await redis.connect();
-  stopPolling = mode === "polling" ? startPolling(store, connections, providers, new UpdateProcessor(store, providers, conversation)) : () => {};
-  server = app.listen(Number(process.env.PORT) || 3010, () => console.log("Bot integration service started", { storage: "ready", mode }));
+  stopPolling = Object.values(modes).includes("polling") ? startPolling(store, connections, providers, new UpdateProcessor(store, providers, conversation), modes) : () => {};
+  server = app.listen(Number(process.env.PORT) || 3010, () => console.log("Bot integration service started", { storage: "ready", modes }));
   server.on("error", () => { console.error("Bot service could not listen on its configured port"); void stop(1); });
 }
 void start().catch(() => { console.error("Bot service startup failed: check Redis connectivity and service configuration"); void stop(1); });

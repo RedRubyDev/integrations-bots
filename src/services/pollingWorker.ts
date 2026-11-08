@@ -2,9 +2,10 @@ import { randomUUID } from "crypto";
 import { BotProvider, IntegrationError, Provider, Store } from "../contracts";
 import { Connections } from "../storage/connections";
 import { UpdateProcessor } from "./updateProcessor";
+import { UpdateModes } from "../updateModes";
 
-/** Explicit development transport: no public callback URL or HTTPS tunnel is needed. */
-export function startPolling(store: Store, connections: Connections, providers: Record<Provider, BotProvider>, processor: UpdateProcessor): () => void {
+/** Poll only persisted polling connections whose provider still enables polling. */
+export function startPolling(store: Store, connections: Connections, providers: Record<Provider, BotProvider>, processor: UpdateProcessor, modes?: UpdateModes): () => void {
   let stopped = false; let running = false; let directoryRetryAt = 0;
   const retries = new Map<string, number>();
   const tick = async () => {
@@ -13,6 +14,7 @@ export function startPolling(store: Store, connections: Connections, providers: 
     try {
       for (const connection of await connections.pollingConnections()) {
         if (stopped) break;
+        if (modes && modes[connection.provider] !== "polling") continue;
         if ((retries.get(connection.id) || 0) > Date.now()) continue;
         const lockKey = `polling:${connection.id}`; const lock = randomUUID();
         if (!await store.set(lockKey, lock, { ttl: 60, onlyIfAbsent: true })) continue;
